@@ -1,7 +1,0 @@
-<include>
-    <extension name="outbound_calls">
-        <condition field="destination_number" expression="^(.614\d+)$">
-            <action application="bridge" data="sofia/gateway/byrds/$1"/>
-        </condition>
-    </extension>
-</include>
