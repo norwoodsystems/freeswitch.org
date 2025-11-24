@@ -1,6 +1,0 @@
-<configuration name="lua.conf" description="LUA Configuration">
-  <settings>
-    <hook event="CUSTOM" subclass="vm::maintenance" script="voicemail-event.lua"/>
-    <!-- <hook event="CHANNEL_HANGUP_COMPLETE"  script="missed_call_event.lua"/> -->
-  </settings>
-</configuration>
