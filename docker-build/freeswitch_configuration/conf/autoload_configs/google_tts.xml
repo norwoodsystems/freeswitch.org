@@ -1,5 +1,0 @@
-<configuration name="google_tts.conf" description="Google Text-to-Speech Configuration">
-  <settings>
-    <param name="google-application-credentials-json-file" value="/usr/local/freeswitch/freeswitch-api-7867f30c80d7-1.json"/>
-  </settings>
-</configuration>
