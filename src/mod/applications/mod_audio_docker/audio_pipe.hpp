@@ -173,6 +173,7 @@ private:
   unsigned int m_port;
   std::string m_path;
   std::string m_metadata;
+  std::string m_debug_metadata;
   std::mutex m_text_mutex;
   std::mutex m_audio_mutex;
   int m_sslFlags;

@@ -754,7 +754,7 @@ extern "C" {
             frame.buflen = available = pAudioPipe->binarySpaceAvailable();
             frame.data = pAudioPipe->binaryWritePtr();
             dirty = true;
-            switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "audio_docker_frame - write audio len:%d, audio_buffer_size:%d\n", frame.datalen, (pAudioPipe->binarySpaceSize() - LWS_PRE));
+            switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "(%u) audio_docker_frame - sessionId:%s write audio len:%d, audio_buffer_size:%d\n", tech_pvt->id, switch_core_session_get_uuid(session), frame.datalen, (pAudioPipe->binarySpaceSize() - LWS_PRE));
           }
         }
       }

@@ -237,7 +237,7 @@ int AudioPipe::lws_callback(struct lws *wsi,
 
     case LWS_CALLBACK_CLIENT_WRITEABLE:
       {
-         lwsl_notice("AudioPipe::lws_callback LWS_CALLBACK_CLIENT_WRITEABLE \n"); 
+         lwsl_notice("AudioPipe::lws_callback LWS_CALLBACK_CLIENT_WRITEABLE uuid:%s metadata:%s\n", (*ppAp) ? (*ppAp)->m_uuid.c_str() : "<nil>", (*ppAp) ? (*ppAp)->m_debug_metadata.c_str() : "<nil>"); 
         AudioPipe* ap = *ppAp;
         if (!ap) {
           lwsl_err("AudioPipe::lws_callback LWS_CALLBACK_CLIENT_WRITEABLE %s unable to find wsi %p..\n", ap->m_uuid.c_str(), wsi); 
@@ -266,7 +266,7 @@ int AudioPipe::lws_callback(struct lws *wsi,
               return -1;
             }
 
-            lwsl_notice("AudioPipe::lws_write - sent %d text\n", m); 
+            lwsl_notice("AudioPipe::lws_write - uuid:%s metadata:%s sent %d text\n", ap->m_uuid.c_str(), ap->m_debug_metadata.c_str(), m); 
             // there may be audio data, but only one write per writeable event
             // get it next time
             lws_callback_on_writable(wsi);
@@ -274,7 +274,7 @@ int AudioPipe::lws_callback(struct lws *wsi,
             return 0;
           }
           else {
-            lwsl_notice("AudioPipe::lws_write - NO DATA (text) to send\n"); 
+            lwsl_notice("AudioPipe::lws_write - uuid:%s metadata:%s NO DATA (text) to send\n", ap->m_uuid.c_str(), ap->m_debug_metadata.c_str()); 
           }
         }
 
@@ -293,7 +293,7 @@ int AudioPipe::lws_callback(struct lws *wsi,
               lwsl_err("AudioPipe::lws_service_thread LWS_CALLBACK_CLIENT_WRITEABLE %s attemped to send %lu only sent %d wsi %p..\n", 
                 ap->m_uuid.c_str(), datalen, sent, wsi); 
             }
-            lwsl_notice("AudioPipe::lws_write - sent %d audio(binary)\n", sent); 
+            lwsl_notice("AudioPipe::lws_write - uuid:%s metadata:%s sent %d audio(binary)\n", ap->m_uuid.c_str(), ap->m_debug_metadata.c_str(), sent); 
             ap->m_audio_buffer_write_offset = LWS_PRE;
           }
         }
@@ -428,7 +428,7 @@ void AudioPipe::addPendingDisconnect(AudioPipe* ap) {
   lws_cancel_service(ap->m_vhd->context);
 }
 void AudioPipe::addPendingWrite(AudioPipe* ap) {
-    lwsl_notice("before - addPendingWrite\n"); 
+    lwsl_notice("before - addPendingWrite uuid:%s metadata:%s\n", ap->m_uuid.c_str(), ap->m_debug_metadata.c_str()); 
   {
     std::lock_guard<std::mutex> guard(mutex_writes);
     pendingWrites.push_back(ap);
@@ -529,9 +529,10 @@ AudioPipe::AudioPipe(const char* uuid, const char* host, unsigned int port, cons
 
   m_audio_buffer = new uint8_t[m_audio_buffer_max_len];
   m_metadata.append(metadata);
+  m_debug_metadata.append(metadata);
   if (apiToken) {
     m_api_token.assign(apiToken);
-    lwsl_notice("AudioPipe:: init - apiToken:%s,metadata:%s, tcp_keepalive:%d, max_buffer_len:%d, min_freespace:%d\n", apiToken,m_metadata.c_str(), nTcpKeepaliveSecs,m_audio_buffer_max_len, m_audio_buffer_min_freespace);
+    lwsl_notice("AudioPipe:: init - uuid:%s apiToken:%s,metadata:%s, tcp_keepalive:%d, max_buffer_len:%d, min_freespace:%d\n", m_uuid.c_str(), apiToken,m_metadata.c_str(), nTcpKeepaliveSecs,m_audio_buffer_max_len, m_audio_buffer_min_freespace);
   }
 }
 AudioPipe::~AudioPipe() {
@@ -603,4 +604,3 @@ std::string AudioPipe::base64EncodedAudio(size_t len) {
 char* AudioPipe::b64AudioEncoding(size_t len) {
   return norwood::b64_encode((unsigned char*)audioReadPtr(), len);
 }
-
