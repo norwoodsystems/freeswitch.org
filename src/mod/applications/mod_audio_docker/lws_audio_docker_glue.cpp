@@ -64,6 +64,46 @@ void parse_wav_header(unsigned char *header) {
     // You can extract more information as needed
 }
 
+std::string get_metadata_value(const char *metadata, const char *key) {
+    if (!metadata || !key || !*key) {
+      return "";
+    }
+
+    std::string raw(metadata);
+    std::string prefix = std::string(key) + "=";
+    size_t start = 0;
+
+    while (start < raw.size()) {
+      size_t end = raw.find('/', start);
+      std::string token = raw.substr(start, end == std::string::npos ? std::string::npos : end - start);
+      if (token.rfind(prefix, 0) == 0) {
+        return token.substr(prefix.size());
+      }
+      if (end == std::string::npos) {
+        break;
+      }
+      start = end + 1;
+    }
+
+    return "";
+}
+
+const char *resolve_play_audio_direction(const char *metadata) {
+    std::string playbackTarget = get_metadata_value(metadata, "X-Playback-Target");
+
+    if (playbackTarget == "self") {
+      return PLAY_AUDIO_TO_A_LEG;
+    }
+    if (playbackTarget == "other") {
+      return PLAY_AUDIO_TO_B_LEG;
+    }
+    if (playbackTarget == "both") {
+      return PLAY_AUDIO_TO_BOTH;
+    }
+
+    return playAudioDirection;
+}
+
   void processIncomingMessage(private_t* tech_pvt, switch_core_session_t* session, const char* msg_type, const char* message, size_t length) {
   std::string msg = message;
   std::string type  = msg_type;
@@ -99,7 +139,10 @@ void parse_wav_header(unsigned char *header) {
               displace = 1;
             }
 
-            if (strcmp(playAudioDirection, PLAY_AUDIO_TO_A_LEG) == 0) {
+            const char *effectivePlayAudioDirection = resolve_play_audio_direction(tech_pvt->initialMetadata);
+            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "processIncomingMessage - playback target metadata:%s effective direction:%s\n", get_metadata_value(tech_pvt->initialMetadata, "X-Playback-Target").c_str(), effectivePlayAudioDirection);
+
+            if (strcmp(effectivePlayAudioDirection, PLAY_AUDIO_TO_A_LEG) == 0) {
               switch_status_t status = SWITCH_STATUS_NOT_INITALIZED;
               if (displace == 1) {
                 switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "processIncomingMessage - switch_ivr_displace_session\n");
@@ -120,7 +163,7 @@ void parse_wav_header(unsigned char *header) {
                     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG,  "processIncomingMessage - Error deleting the file");
                   }
               }
-            } else if (strcmp(playAudioDirection, PLAY_AUDIO_TO_B_LEG) == 0) {
+            } else if (strcmp(effectivePlayAudioDirection, PLAY_AUDIO_TO_B_LEG) == 0) {
               switch_channel_t *channel = switch_core_session_get_channel(session);
               const char *other_uuid = switch_channel_get_variable(channel, SWITCH_BRIDGE_UUID_VARIABLE);
               switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "processIncomingMessage (bridged_session) - other_uuid: %s\n", other_uuid);
@@ -149,7 +192,7 @@ void parse_wav_header(unsigned char *header) {
               } else {
                       switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING,  "processIncomingMessage (bridged_session) - Could not locate (bridged_session)");
               }
-            } else if (strcmp(playAudioDirection, PLAY_AUDIO_TO_BOTH) == 0) {
+            } else if (strcmp(effectivePlayAudioDirection, PLAY_AUDIO_TO_BOTH) == 0) {
               switch_channel_t *channel = switch_core_session_get_channel(session);
               const char *other_uuid = switch_channel_get_variable(channel, SWITCH_BRIDGE_UUID_VARIABLE);
               switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "processIncomingMessage (bridged_session) - other_uuid: %s\n", other_uuid);
