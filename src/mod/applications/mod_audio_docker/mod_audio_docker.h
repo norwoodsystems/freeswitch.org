@@ -54,6 +54,10 @@ struct private_data {
   int audio_paused:1;
   int graceful_shutdown:1;
   char initialMetadata[8533];
+  switch_queue_t   *audio_queue;
+  switch_thread_t  *playback_thread;
+  volatile int      playback_running;
+  unsigned int      audio_seq;
 };
 
 typedef struct private_data private_t;

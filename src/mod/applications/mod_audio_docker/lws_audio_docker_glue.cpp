@@ -113,124 +113,44 @@ const char *resolve_play_audio_direction(const char *metadata) {
       switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "processIncomingMessage - unable to find session\n");
     } else {
       if (type == "AUDIO") {
-        // Let's try both options - stream audio to the session and and to a callig party as well as store it in a file and then send it to the session
           const char* sessionId = switch_core_session_get_uuid(session);
-          lwsl_notice("processIncomingMessage - (%s) AUDIO (len:%d)\n",sessionId, length);
+          lwsl_notice("processIncomingMessage - (%s) AUDIO (len:%d)\n", sessionId, length);
           if (session && switch_channel_ready(switch_core_session_get_channel(session))) {
             unsigned char header[44] = {0};
             memcpy(header, message, 44);
             parse_wav_header(header);
-            // std::string filename = "";
-            // filename = strcat((char*)sessionId,".wav");
-            // std::string path =  strcat((char*)freeswitchHome, "/");
-            std::string filename = std::string(sessionId) + ".wav";
-            std::string path =  std::string(freeswitchHome) + "/" + filename;
-            
+
+            // Unique filename per chunk so rapid arrivals never overwrite each other
+            std::string filename = std::string(sessionId) + "_" +
+                                   std::to_string(tech_pvt->audio_seq++) + ".wav";
+            std::string path = std::string(freeswitchHome) + "/" + filename;
+
             FILE* file = fopen(path.c_str(), "wb");
-            size_t written = fwrite(message, sizeof(char), length, file);
-            fclose(file);
-            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "processIncomingMessage - store audio into file: %s message-len:%d\n",path.c_str(), length);
-            if (written != length) {
-                // Handle partial write or error
-                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "processIncomingMessage - Failed to write all audio data - written: %d, len: %d\n", written, length);
-            }
-            int displace = 0;
-            if (strcmp(displaceAudio, DISPLACE_AUDIO) == 0) {
-              displace = 1;
-            }
-
-            const char *effectivePlayAudioDirection = resolve_play_audio_direction(tech_pvt->initialMetadata);
-            switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "processIncomingMessage - playback target metadata:%s effective direction:%s\n", get_metadata_value(tech_pvt->initialMetadata, "X-Playback-Target").c_str(), effectivePlayAudioDirection);
-
-            if (strcmp(effectivePlayAudioDirection, PLAY_AUDIO_TO_A_LEG) == 0) {
-              switch_status_t status = SWITCH_STATUS_NOT_INITALIZED;
-              if (displace == 1) {
-                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "processIncomingMessage - switch_ivr_displace_session\n");
-                status = switch_ivr_displace_session(session, path.c_str(), 0, NULL);
-              } else {
-                  switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "processIncomingMessage - play the announcement on A leg of the call.");
-                status = switch_ivr_play_file(session, NULL, path.c_str(), NULL);
-              }
-              if (status != SWITCH_STATUS_SUCCESS) {
-                  switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "processIncomingMessage - Failed to play audio file: %s\n", path.c_str());
-              } else {
-                  switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "processIncomingMessage - Played audio file: %s\n", path.c_str());
-                  // Delete the file
-                  if (std::remove(path.c_str()) == 0) {
-                    // free(file);
-                    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "processIncomingMessage - The file %s was deleted successfully.\n", path.c_str());
-                  } else {
-                    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG,  "processIncomingMessage - Error deleting the file");
-                  }
-              }
-            } else if (strcmp(effectivePlayAudioDirection, PLAY_AUDIO_TO_B_LEG) == 0) {
-              switch_channel_t *channel = switch_core_session_get_channel(session);
-              const char *other_uuid = switch_channel_get_variable(channel, SWITCH_BRIDGE_UUID_VARIABLE);
-              switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "processIncomingMessage (bridged_session) - other_uuid: %s\n", other_uuid);
-              switch_core_session_t *other_session = switch_core_session_locate(other_uuid);
-              if (other_session) {
-                switch_status_t status = SWITCH_STATUS_NOT_INITALIZED;
-                if (displace == 1) {
-                  switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "processIncomingMessage - play the announcement on B leg of the call.");
-                  status = switch_ivr_displace_session(other_session, path.c_str(), 0, NULL);
-                } else {
-                  switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "processIncomingMessage - switch_ivr_play_file");
-                  status = switch_ivr_play_file(other_session, NULL, path.c_str(), NULL);
-                }
-                if (status != SWITCH_STATUS_SUCCESS) {
-                    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "processIncomingMessage (bridged_session) - Failed to play audio file: %s\n", path.c_str());
-                } else {
-                    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "processIncomingMessage (bridged_session) - Played audio file: %s\n", path.c_str());
-                    // Delete the file
-                    if (std::remove(path.c_str()) == 0) {
-                      // free(file);
-                      switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "processIncomingMessage (bridged_session) - The file %s was deleted successfully.\n", path.c_str());
-                    } else {
-                      switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG,  "processIncomingMessage (bridged_session) - Error deleting the file");
-                    }
-                }
-              } else {
-                      switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING,  "processIncomingMessage (bridged_session) - Could not locate (bridged_session)");
-              }
-            } else if (strcmp(effectivePlayAudioDirection, PLAY_AUDIO_TO_BOTH) == 0) {
-              switch_channel_t *channel = switch_core_session_get_channel(session);
-              const char *other_uuid = switch_channel_get_variable(channel, SWITCH_BRIDGE_UUID_VARIABLE);
-              switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "processIncomingMessage (bridged_session) - other_uuid: %s\n", other_uuid);
-              switch_core_session_t *other_session = switch_core_session_locate(other_uuid);
-              if (other_session) {
-                switch_status_t status = SWITCH_STATUS_NOT_INITALIZED;
-                switch_status_t status1 = SWITCH_STATUS_NOT_INITALIZED;
-                if (displace == 1) {
-                  switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "processIncomingMessage - play the announcement on both legs of the call.");
-                  status = switch_ivr_displace_session(session, path.c_str(), 0, NULL);
-                  status1 = switch_ivr_displace_session(other_session, path.c_str(), 0, NULL);
-                } else {
-                  switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "processIncomingMessage - switch_ivr_play_file");
-                  status = switch_ivr_play_file(other_session, NULL, path.c_str(), NULL);
-                }
-                if (status != SWITCH_STATUS_SUCCESS) {
-                    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "processIncomingMessage (session) - Failed to play audio file: %s\n", path.c_str());
-                } 
-                if (status1 != SWITCH_STATUS_SUCCESS) {
-                    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "processIncomingMessage (bridged_session) - Failed to play audio file: %s\n", path.c_str());
-                } 
-                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "processIncomingMessage (PLAY_AUDIO_TO_BOTH) - Played audio file: %s\n", path.c_str());
-                // Delete the file
-                if (std::remove(path.c_str()) == 0) {
-                  // free(file);
-                  switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "processIncomingMessage (PLAY_AUDIO_TO_BOTH) - The file %s was deleted successfully.\n", path.c_str());
-                } else {
-                  switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG,  "processIncomingMessage (PLAY_AUDIO_TO_BOTH) - Error deleting the file");
-                }
-              } else {
-                      switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING,  "processIncomingMessage (PLAY_AUDIO_TO_BOTH)  - Could not locate (bridged_session)");
-              }
+            if (!file) {
+              switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR,
+                "processIncomingMessage - failed to open file: %s\n", path.c_str());
             } else {
-              switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "processIncomingMessage - EVENT_PLAY_AUDIO - path: %s\n",path.c_str());
-              tech_pvt->responseHandler(session, EVENT_PLAY_AUDIO, (char *) path.c_str());
+              size_t written = fwrite(message, sizeof(char), length, file);
+              fclose(file);
+              switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG,
+                "processIncomingMessage - saved audio: %s (%zu bytes)\n", path.c_str(), written);
+              if (written != length) {
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING,
+                  "processIncomingMessage - partial write: %zu of %zu\n", written, length);
+              }
+
+              // Enqueue for sequential playback; return immediately so the WS thread is never blocked
+              char *path_copy = strdup(path.c_str());
+              if (switch_queue_trypush(tech_pvt->audio_queue, path_copy) != SWITCH_STATUS_SUCCESS) {
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING,
+                  "processIncomingMessage - audio queue full, dropping: %s\n", path.c_str());
+                std::remove(path.c_str());
+                free(path_copy);
+              }
             }
           } else {
-              switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_WARNING, "Cannot play audio. The channel is not ready or session is invalid.\n");
+              switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_WARNING,
+                "processIncomingMessage - channel not ready, dropping audio\n");
           }
 
         // switch_frame_t  write_frame = { 0 };
@@ -364,6 +284,76 @@ const char *resolve_play_audio_direction(const char *metadata) {
     // }
   }
 
+  static void *SWITCH_THREAD_FUNC audio_playback_thread_func(switch_thread_t *thread, void *obj) {
+    private_t *tech_pvt = (private_t *)obj;
+    void *item = NULL;
+
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO,
+      "(%u) audio_playback_thread_func - started\n", tech_pvt->id);
+
+    while (tech_pvt->playback_running) {
+      if (switch_queue_pop(tech_pvt->audio_queue, &item) != SWITCH_STATUS_SUCCESS || !item) {
+        break;
+      }
+      char *path = (char *)item;
+      switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG,
+        "(%u) audio_playback_thread_func - playing: %s\n", tech_pvt->id, path);
+
+      switch_core_session_t *session = switch_core_session_locate(tech_pvt->sessionId);
+      if (session) {
+        switch_channel_t *channel = switch_core_session_get_channel(session);
+        if (switch_channel_ready(channel)) {
+          const char *effectiveDir = resolve_play_audio_direction(tech_pvt->initialMetadata);
+          switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG,
+            "(%u) audio_playback_thread_func - effective direction: %s\n", tech_pvt->id, effectiveDir);
+
+          if (strcmp(effectiveDir, PLAY_AUDIO_TO_A_LEG) == 0) {
+            switch_ivr_play_file(session, NULL, path, NULL);
+
+          } else if (strcmp(effectiveDir, PLAY_AUDIO_TO_B_LEG) == 0) {
+            const char *other_uuid = switch_channel_get_variable(channel, SWITCH_BRIDGE_UUID_VARIABLE);
+            if (other_uuid) {
+              switch_core_session_t *other = switch_core_session_locate(other_uuid);
+              if (other) {
+                switch_ivr_play_file(other, NULL, path, NULL);
+                switch_core_session_rwunlock(other);
+              } else {
+                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING,
+                  "(%u) audio_playback_thread_func - could not locate B leg\n", tech_pvt->id);
+              }
+            }
+
+          } else if (strcmp(effectiveDir, PLAY_AUDIO_TO_BOTH) == 0) {
+            const char *other_uuid = switch_channel_get_variable(channel, SWITCH_BRIDGE_UUID_VARIABLE);
+            switch_ivr_play_file(session, NULL, path, NULL);
+            if (other_uuid) {
+              switch_core_session_t *other = switch_core_session_locate(other_uuid);
+              if (other) {
+                switch_ivr_play_file(other, NULL, path, NULL);
+                switch_core_session_rwunlock(other);
+              }
+            }
+
+          } else {
+            tech_pvt->responseHandler(session, EVENT_PLAY_AUDIO, path);
+          }
+        } else {
+          switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING,
+            "(%u) audio_playback_thread_func - channel not ready, skipping: %s\n",
+            tech_pvt->id, path);
+        }
+        switch_core_session_rwunlock(session);
+      }
+
+      std::remove(path);
+      free(path);
+    }
+
+    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO,
+      "(%u) audio_playback_thread_func - exiting\n", tech_pvt->id);
+    return NULL;
+  }
+
   static void eventCallback(const char* sessionId, AudioPipe::NotifyEvent_t event, const char* message, size_t msg_length) {
     switch_core_session_t* session = switch_core_session_locate(sessionId);
     if (session) {
@@ -471,6 +461,29 @@ const char *resolve_play_audio_direction(const char *metadata) {
 
     switch_mutex_init(&tech_pvt->mutex, SWITCH_MUTEX_NESTED, switch_core_session_get_pool(session));
 
+    if (switch_queue_create(&tech_pvt->audio_queue, 64,
+          switch_core_session_get_pool(session)) != SWITCH_STATUS_SUCCESS) {
+      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR,
+        "(%u) audio_docker_data_init - failed to create audio playback queue\n", tech_pvt->id);
+      return SWITCH_STATUS_FALSE;
+    }
+    tech_pvt->playback_running = 1;
+    tech_pvt->audio_seq = 0;
+
+    {
+      switch_threadattr_t *thd_attr = NULL;
+      switch_threadattr_create(&thd_attr, switch_core_session_get_pool(session));
+      switch_threadattr_stacksize_set(thd_attr, SWITCH_THREAD_STACKSIZE);
+      if (switch_thread_create(&tech_pvt->playback_thread, thd_attr,
+            audio_playback_thread_func, tech_pvt,
+            switch_core_session_get_pool(session)) != SWITCH_STATUS_SUCCESS) {
+        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR,
+          "(%u) audio_docker_data_init - failed to start playback thread\n", tech_pvt->id);
+        tech_pvt->playback_running = 0;
+        return SWITCH_STATUS_FALSE;
+      }
+    }
+
     if (desiredSampling != sampling) {
       switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "(%u) resampling from %u to %u\n", tech_pvt->id, sampling, desiredSampling);
       tech_pvt->resampler = speex_resampler_init(channels, sampling, desiredSampling, SWITCH_RESAMPLE_QUALITY, &err);
@@ -490,6 +503,28 @@ const char *resolve_play_audio_direction(const char *metadata) {
 
   void destroy_tech_pvt(private_t* tech_pvt) {
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s (%u) destroy_tech_pvt\n", tech_pvt->sessionId, tech_pvt->id);
+
+    // Stop the playback thread before freeing anything else
+    if (tech_pvt->playback_running) {
+      tech_pvt->playback_running = 0;
+      if (tech_pvt->audio_queue) {
+        switch_queue_term(tech_pvt->audio_queue);
+      }
+      if (tech_pvt->playback_thread) {
+        switch_status_t rv;
+        switch_thread_join(&rv, tech_pvt->playback_thread);
+        tech_pvt->playback_thread = NULL;
+      }
+      // Delete any files still waiting in the queue
+      if (tech_pvt->audio_queue) {
+        void *item;
+        while (switch_queue_trypop(tech_pvt->audio_queue, &item) == SWITCH_STATUS_SUCCESS && item) {
+          std::remove((char *)item);
+          free(item);
+        }
+      }
+    }
+
     if (tech_pvt->resampler) {
       speex_resampler_destroy(tech_pvt->resampler);
       tech_pvt->resampler = nullptr;
