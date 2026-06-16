@@ -8,7 +8,6 @@
 #include <deque>
 #include <unordered_map>
 #include <memory>
-#include <atomic>
 #include <algorithm>
 #include <functional>
 #include <cassert>
@@ -46,7 +45,8 @@ namespace {
   static unsigned int idxCallCount = 0;
 	  static uint32_t skip_printing = 0;
 	  static size_t streaming_size = FRAME_SIZE_8000 * ::atoi(numberOfFramesForStreaming);
-	  static std::atomic<uint64_t> playbackSequence(0);
+	  static std::mutex playbackSequenceMutex;
+	  static std::unordered_map<std::string, uint64_t> playbackSequences;
 
 
 	void parse_wav_header(unsigned char *header) {
@@ -135,8 +135,22 @@ namespace {
 	    return true;
 	}
 
+	uint64_t next_playback_sequence(const char *sessionId) {
+	    std::lock_guard<std::mutex> lock(playbackSequenceMutex);
+	    return ++playbackSequences[sessionId ? sessionId : ""];
+	}
+
+	void clear_playback_sequence(const char *sessionId) {
+	    if (!sessionId || !*sessionId) {
+	      return;
+	    }
+
+	    std::lock_guard<std::mutex> lock(playbackSequenceMutex);
+	    playbackSequences.erase(sessionId);
+	}
+
 	std::string write_unique_wav_file(const char *sessionId, const char *message, size_t length) {
-	    uint64_t seq = ++playbackSequence;
+	    uint64_t seq = next_playback_sequence(sessionId);
 	    std::string dir = std::string(freeswitchHome) + "/audio_docker/" + sessionId;
 	    if (!ensure_directory(dir)) {
 	      return "";
@@ -182,7 +196,8 @@ namespace {
 	          queue = std::make_shared<TargetQueue>();
 	          m_queues[target_uuid] = queue;
 	        }
-	        queue->files.push_back(PlaybackItem{file, displace, duration_ms});
+	        queue->files.push_back(PlaybackItem{file, displace, duration_ms, (uint64_t)switch_micro_time_now()});
+	        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "audio_docker playback queue - queued target:%s depth:%lu file:%s\n", target_uuid.c_str(), (unsigned long)queue->files.size(), file.c_str());
 	        if (!queue->running) {
 	          queue->running = true;
 	          std::thread(&PlaybackQueueManager::worker, this, target_uuid).detach();
@@ -195,6 +210,7 @@ namespace {
 	      std::string file;
 	      bool displace;
 	      uint32_t duration_ms;
+	      uint64_t enqueue_time_us;
 	    };
 
 	    struct TargetQueue {
@@ -237,10 +253,12 @@ namespace {
 	      }
 
 	      switch_status_t status = SWITCH_STATUS_FALSE;
+	      uint64_t now_us = (uint64_t)switch_micro_time_now();
+	      uint64_t wait_ms = now_us >= item.enqueue_time_us ? (now_us - item.enqueue_time_us) / 1000 : 0;
 	      switch_channel_t *channel = switch_core_session_get_channel(target_session);
 	      if (channel && switch_channel_ready(channel)) {
 	        if (item.displace) {
-	          switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "audio_docker playback queue - displace target:%s file:%s duration_ms:%u\n", target_uuid.c_str(), item.file.c_str(), item.duration_ms);
+	          switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "audio_docker playback queue - displace target:%s file:%s duration_ms:%u queue_wait_ms:%lu\n", target_uuid.c_str(), item.file.c_str(), item.duration_ms, (unsigned long)wait_ms);
 	          status = switch_ivr_displace_session(target_session, item.file.c_str(), 0, NULL);
 	          if (status == SWITCH_STATUS_SUCCESS) {
 	            uint32_t remaining_ms = item.duration_ms + 100;
@@ -252,7 +270,7 @@ namespace {
 	            switch_ivr_stop_displace_session(target_session, item.file.c_str());
 	          }
 	        } else {
-	          switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "audio_docker playback queue - play_file target:%s file:%s\n", target_uuid.c_str(), item.file.c_str());
+	          switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "audio_docker playback queue - play_file target:%s file:%s queue_wait_ms:%lu\n", target_uuid.c_str(), item.file.c_str(), (unsigned long)wait_ms);
 	          status = switch_ivr_play_file(target_session, NULL, item.file.c_str(), NULL);
 	        }
 	      }
@@ -824,6 +842,7 @@ extern "C" {
       playout = playout->next;
       free(tmp);
     }
+    clear_playback_sequence(tech_pvt->sessionId);
 
     if (pAudioPipe && text) pAudioPipe->bufferForSending(text);
     if (pAudioPipe) pAudioPipe->close();
