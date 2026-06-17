@@ -1,6 +1,7 @@
 #include <switch.h>
 #include <switch_json.h>
 #include <string.h>
+#include <strings.h>
 #include <string>
 #include <mutex>
 #include <thread>
@@ -205,6 +206,34 @@ namespace {
 	      }
 	    }
 
+	    size_t clear(const std::string& target_uuid) {
+	      size_t removed = 0;
+
+	      if (target_uuid.empty()) {
+	        return removed;
+	      }
+
+	      std::lock_guard<std::mutex> lock(m_queues_mutex);
+	      auto it = m_queues.find(target_uuid);
+	      if (it == m_queues.end()) {
+	        return removed;
+	      }
+
+	      while (!it->second->files.empty()) {
+	        PlaybackItem item = it->second->files.front();
+	        it->second->files.pop_front();
+	        if (std::remove(item.file.c_str()) == 0) {
+	          switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "audio_docker playback queue - removed queued file target:%s file:%s\n", target_uuid.c_str(), item.file.c_str());
+	        } else {
+	          switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "audio_docker playback queue - failed to remove queued file target:%s file:%s\n", target_uuid.c_str(), item.file.c_str());
+	        }
+	        removed++;
+	      }
+
+	      switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "audio_docker playback queue - clear target:%s removed:%lu\n", target_uuid.c_str(), (unsigned long)removed);
+	      return removed;
+	    }
+
 	private:
 	    struct PlaybackItem {
 	      std::string file;
@@ -340,6 +369,92 @@ const char *resolve_play_audio_direction(const char *metadata) {
     return playAudioDirection;
 }
 
+const char *resolve_control_target_direction(const char *metadata, const char *target) {
+    if (target && *target) {
+      if (!strcasecmp(target, "self")) {
+        return PLAY_AUDIO_TO_A_LEG;
+      }
+      if (!strcasecmp(target, "other")) {
+        return PLAY_AUDIO_TO_B_LEG;
+      }
+      if (!strcasecmp(target, "both")) {
+        return PLAY_AUDIO_TO_BOTH;
+      }
+      if (!strcasecmp(target, PLAY_AUDIO_TO_A_LEG)) {
+        return PLAY_AUDIO_TO_A_LEG;
+      }
+      if (!strcasecmp(target, PLAY_AUDIO_TO_B_LEG)) {
+        return PLAY_AUDIO_TO_B_LEG;
+      }
+      if (!strcasecmp(target, PLAY_AUDIO_TO_BOTH)) {
+        return PLAY_AUDIO_TO_BOTH;
+      }
+
+      return NULL;
+    }
+
+    return resolve_play_audio_direction(metadata);
+}
+
+size_t clear_playback_queue_for_uuid(const char *target_uuid) {
+    if (!target_uuid || !*target_uuid) {
+      return 0;
+    }
+
+    return PlaybackQueueManager::instance().clear(target_uuid);
+}
+
+size_t clear_playback_queue_for_direction(switch_core_session_t* session, const char *direction) {
+    size_t removed = 0;
+    const char* sessionId = switch_core_session_get_uuid(session);
+    switch_channel_t *channel = switch_core_session_get_channel(session);
+    const char *other_uuid = channel ? switch_channel_get_variable(channel, SWITCH_BRIDGE_UUID_VARIABLE) : NULL;
+
+    if (strcmp(direction, PLAY_AUDIO_TO_A_LEG) == 0) {
+      removed += clear_playback_queue_for_uuid(sessionId);
+    } else if (strcmp(direction, PLAY_AUDIO_TO_B_LEG) == 0) {
+      removed += clear_playback_queue_for_uuid(other_uuid);
+    } else if (strcmp(direction, PLAY_AUDIO_TO_BOTH) == 0) {
+      removed += clear_playback_queue_for_uuid(sessionId);
+      removed += clear_playback_queue_for_uuid(other_uuid);
+    }
+
+    return removed;
+}
+
+bool handle_playback_control_message(private_t* tech_pvt, switch_core_session_t* session, const std::string& msg) {
+    cJSON *json = cJSON_Parse(msg.c_str());
+    if (!json) {
+      return false;
+    }
+
+    bool handled = false;
+    const char *type = cJSON_GetObjectCstr(json, "type");
+    const char *action = cJSON_GetObjectCstr(json, "action");
+
+    if (type && action && !strcasecmp(type, "playback_control") && !strcasecmp(action, "clear_queue")) {
+      cJSON *finish_current = cJSON_GetObjectItem(json, "finish_current");
+      if (finish_current && cJSON_IsBool(finish_current) && !cJSON_IsTrue(finish_current)) {
+        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_WARNING, "playback_control clear_queue with finish_current=false is unsupported; current prompt will not be interrupted\n");
+        handled = true;
+      } else {
+        const char *target = cJSON_GetObjectCstr(json, "target");
+        const char *direction = resolve_control_target_direction(tech_pvt->initialMetadata, target);
+
+        if (direction) {
+          size_t removed = clear_playback_queue_for_direction(session, direction);
+          switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "playback_control clear_queue target:%s direction:%s removed:%lu\n", target ? target : "<default>", direction, (unsigned long)removed);
+        } else {
+          switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_WARNING, "playback_control clear_queue ignored unknown target:%s\n", target ? target : "<null>");
+        }
+        handled = true;
+      }
+    }
+
+    cJSON_Delete(json);
+    return handled;
+}
+
   void processIncomingMessage(private_t* tech_pvt, switch_core_session_t* session, const char* msg_type, const char* message, size_t length) {
   std::string msg = message;
   std::string type  = msg_type;
@@ -420,10 +535,12 @@ const char *resolve_play_audio_direction(const char *metadata) {
         // else {
         //   lwsl_notice("AudioPipe::lws_service_thread LWS_CALLBACK_CLIENT_RECEIVE wrote frame to session: %d\n", strlen(msg.c_str()));
         // }
-      } else if (type == "MESSAGE"){
-        lwsl_notice("processIncomingMessage - MESSAGE (len:%d) message:%s\n",strlen(msg.c_str()), msg);
-        tech_pvt->responseHandler(session, EVENT_TEXT_MESSAGE, (char *) msg.c_str());
-      } else {
+	      } else if (type == "MESSAGE"){
+	        lwsl_notice("processIncomingMessage - MESSAGE (len:%d) message:%s\n",strlen(msg.c_str()), msg);
+	        if (!handle_playback_control_message(tech_pvt, session, msg)) {
+	          tech_pvt->responseHandler(session, EVENT_TEXT_MESSAGE, (char *) msg.c_str());
+	        }
+	      } else {
         lwsl_err("processIncomingMessage - unknown message type\n");
       }
 
